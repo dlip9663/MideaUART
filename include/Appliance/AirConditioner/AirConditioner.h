@@ -38,7 +38,17 @@ class AirConditioner : public ApplianceBase {
   Preset getPreset() const { return this->m_preset; }
   const Capabilities &getCapabilities() const { return this->m_capabilities; }
   void displayToggle() { this->m_displayToggle(); }
+  // Display unit: -1 keeps whatever the AC reports, 0 forces Celsius, 1 forces
+  // Fahrenheit. A forced unit goes out with every control command and is
+  // re-sent (up to 3 tries) whenever a status shows the AC on the other unit.
+  void setDisplayUnit(int8_t unit);
+  int8_t getDisplayUnit() const { return this->m_displayUnit; }
+  // True once a status frame has been read from the AC
+  bool hasStatus() const { return this->m_hasStatus; }
+  // Unit the AC itself last reported
+  bool isFahrenheitDisplay() const { return this->m_status.isFahrenheits(); }
  protected:
+  void m_applyDisplayUnit();
   void m_getPowerUsage();
   void m_getCapabilities();
   void m_getStatus();
@@ -59,6 +69,9 @@ class AirConditioner : public ApplianceBase {
   Preset m_lastPreset{Preset::PRESET_NONE};
   StatusData m_status{};
   bool m_sendControl{};
+  bool m_hasStatus{};
+  int8_t m_displayUnit{-1};
+  uint8_t m_unitAttempts{};
 };
 
 }  // namespace ac

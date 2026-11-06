@@ -41,6 +41,13 @@ static bool checkConstraints(const Mode &mode, const Preset &preset) {
 void AirConditioner::control(const Control &control) {
   if (this->m_sendControl)
     return;
+  // Every set command is built from the last status read back. Before the
+  // first one that is the zeroed default (Celsius display, power off), so a
+  // command sent right after boot would carry those bits to the AC.
+  if (!this->m_hasStatus) {
+    LOG_W(TAG, "No status read from the AC yet. Control command dropped.");
+    return;
+  }
   StatusData status = this->m_status;
   Mode mode = this->m_mode;
   Preset preset = this->m_preset;
@@ -83,6 +90,8 @@ void AirConditioner::control(const Control &control) {
     status.setMode(mode);
     status.setPreset(preset);
     status.setBeeper(this->m_beeper);
+    if (this->m_displayUnit >= 0)
+      status.setFahrenheits(this->m_displayUnit == 1);
     status.appendCRC();
     if (isModeChanged && preset != Preset::PRESET_NONE && preset != Preset::PRESET_SLEEP) {
       // Last command with preset
@@ -116,6 +125,35 @@ void AirConditioner::m_setStatus(StatusData status) {
       this->m_sendControl = false;
     }
   );
+}
+
+void AirConditioner::setDisplayUnit(int8_t unit) {
+  this->m_displayUnit = unit;
+  this->m_unitAttempts = 0;
+  this->m_applyDisplayUnit();
+}
+
+void AirConditioner::m_applyDisplayUnit() {
+  if (this->m_displayUnit < 0 || !this->m_hasStatus || this->m_sendControl)
+    return;
+  if (this->m_status.isFahrenheits() == (this->m_displayUnit == 1)) {
+    this->m_unitAttempts = 0;
+    return;
+  }
+  if (this->m_unitAttempts >= 3)
+    return;  // the AC is not taking it; setDisplayUnit() starts over
+  this->m_unitAttempts++;
+  LOG_I(TAG, "AC reports %s display. Setting %s (attempt %d)...",
+        this->m_status.isFahrenheits() ? "F" : "C", this->m_displayUnit == 1 ? "F" : "C",
+        this->m_unitAttempts);
+  StatusData status = this->m_status;
+  status.setMode(this->m_mode);
+  status.setPreset(this->m_preset);
+  status.setBeeper(false);
+  status.setFahrenheits(this->m_displayUnit == 1);
+  status.appendCRC();
+  this->m_sendControl = true;
+  this->m_setStatus(std::move(status));
 }
 
 void AirConditioner::setPowerState(bool state) {
@@ -205,6 +243,7 @@ ResponseStatus AirConditioner::m_readStatus(FrameData data) {
   bool hasUpdate = false;
   const StatusData newStatus = data.to<StatusData>();
   this->m_status.copyStatus(newStatus);
+  this->m_hasStatus = true;
   if (this->m_mode != newStatus.getMode()) {
     hasUpdate = true;
     this->m_mode = newStatus.getMode();
@@ -220,6 +259,7 @@ ResponseStatus AirConditioner::m_readStatus(FrameData data) {
   setProperty(this->m_indoorHumidity, newStatus.getHumiditySetpoint(), hasUpdate);
   if (hasUpdate)
     this->sendUpdate();
+  this->m_applyDisplayUnit();
   return ResponseStatus::RESPONSE_OK;
 }
 
